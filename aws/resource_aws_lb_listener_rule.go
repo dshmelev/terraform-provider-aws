@@ -74,6 +74,56 @@ func resourceAwsLbbListenerRule() *schema.Resource {
 							DiffSuppressFunc: suppressIfActionTypeNot("forward"),
 						},
 
+						"forward": {
+							Type:             schema.TypeList,
+							Optional:         true,
+							DiffSuppressFunc: suppressIfActionTypeNot("forward"),
+							MaxItems:         1,
+							Elem: &schema.Resource{
+								Schema: map[string]*schema.Schema{
+									"target_group": {
+										Type:     schema.TypeList,
+										MinItems: 1,
+										MaxItems: 5,
+										Required: true,
+										Elem: &schema.Resource{
+											Schema: map[string]*schema.Schema{
+												"arn": {
+													Type:     schema.TypeString,
+													Required: true,
+												},
+												"weight": {
+													Type:         schema.TypeInt,
+													ValidateFunc: validation.IntBetween(0, 999),
+													Default:      1,
+													Optional:     true,
+												},
+											},
+										},
+									},
+									"stickiness": {
+										Type:     schema.TypeList,
+										Optional: true,
+										MaxItems: 1,
+										Elem: &schema.Resource{
+											Schema: map[string]*schema.Schema{
+												"enabled": {
+													Type:     schema.TypeBool,
+													Required: true,
+												},
+												"duration_s": {
+													Type:     schema.TypeInt,
+													Required: true,
+													// 1s to 7 days
+													ValidateFunc: validation.IntBetween(1, 604800),
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+
 						"redirect": {
 							Type:             schema.TypeList,
 							Optional:         true,
@@ -787,7 +837,31 @@ func resourceAwsLbListenerRuleRead(d *schema.ResourceData, meta interface{}) err
 
 		switch actionMap["type"] {
 		case "forward":
-			actionMap["target_group_arn"] = aws.StringValue(action.TargetGroupArn)
+			// This happens when only one target group is specified.
+			if aws.StringValue(action.TargetGroupArn) != "" {
+				actionMap["target_group_arn"] = aws.StringValue(action.TargetGroupArn)
+			} else {
+				targetGroups := make([]map[string]interface{}, 0, len(action.ForwardConfig.TargetGroups))
+				for _, targetGroup := range action.ForwardConfig.TargetGroups {
+					targetGroups = append(targetGroups,
+						map[string]interface{}{
+							"arn":    aws.StringValue(targetGroup.TargetGroupArn),
+							"weight": aws.Int64Value(targetGroup.Weight),
+						},
+					)
+				}
+				actionMap["forward"] = []map[string]interface{}{
+					{
+						"target_group": targetGroups,
+						"stickiness": []map[string]interface{}{
+							{
+								"enabled":    aws.BoolValue(action.ForwardConfig.TargetGroupStickinessConfig.Enabled),
+								"duration_s": aws.Int64Value(action.ForwardConfig.TargetGroupStickinessConfig.DurationSeconds),
+							},
+						},
+					},
+				}
+			}
 
 		case "redirect":
 			actionMap["redirect"] = []map[string]interface{}{
